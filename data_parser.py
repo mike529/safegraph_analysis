@@ -1,6 +1,16 @@
 import csv
 import pickle
 import datetime
+import gzip
+
+def LoadPickle(file_name):
+	if file_name.endswith(".gz"):
+		with gzip.open(file_name) as f:
+			return pickle.load(f)
+	else:
+		with open(file_name) as f:
+			return pickle.load(f)
+
 
 def ConvertCensusData(census_data_file):
 	pop_by_county = {}
@@ -12,6 +22,10 @@ def ConvertCensusData(census_data_file):
 				pop = float(line['POPESTIMATE2019'])
 				pop_by_county[fips] = pop
 	return pop_by_county
+
+def LoadPopulationByCounty(population_pickle):
+	with open(population_pickle) as f:
+		return pickle.load(f)	
 
 class CountyEstimate():
 	def __init__(self, fips, starting_date):
@@ -42,8 +56,6 @@ def ExtractStats(county_estimate, target_date, num_prev_days):
 		curr_infections[i] = GetEstimate(target_index)[1]
 	return (ever_sick, curr_infections)
 
-
-
 def ConvertEstimates(estimate_file):
 	estimate_by_county = {}
 	with open(estimate_file) as f:
@@ -61,3 +73,18 @@ def ConvertEstimates(estimate_file):
 
 		estimate_by_county[curr_county.fips] = curr_county 
 	return estimate_by_county
+
+
+def LoadRawDiseaseStats(disease_pickle):
+	with open(disease_pickle) as f:
+		raw_disease_by_county = pickle.load(f)
+	return raw_disease_by_county
+
+
+def LoadDiseaseStatsByCounty(disease_stats, load_date, infection_duration):
+
+	disease_by_county = {}
+	for county, county_stats in disease_stats.iteritems():
+		ever_sick, current_infections = ExtractStats(county_stats, load_date, infection_duration)
+		disease_by_county[county] = (ever_sick, current_infections)
+	return disease_by_county

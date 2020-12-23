@@ -72,6 +72,10 @@ def ConvertRowKey(row_key):
 	# Modify to use more of the key, for more granular data.
 	return row_key[:5]
 
+def ConvertRowKeyForTract(row_key):
+	# Uses the census tract as the row_key
+	return row_key[:-1]	
+
 def RowState(row):
 	# Uses the state modify to split less granularly
 	return row['state']
@@ -89,14 +93,14 @@ def MarkKey(state, visit_category, final_key, value, dictionary):
 		current[final_key] = 0
 	current[final_key] += value
 
-def MapPoiToCategory(file_names):
+def MapPoiToCategory(file_names, category_extractor=GetCategory):
 	poi_to_category = {}
 	for file_name in file_names:
 		print("Parsing file: {}".format(file_name))
 		with gzip.open(file_name) as f:
 			csv_dict_reader = csv.DictReader(f)
 			for i, row in enumerate(csv_dict_reader):
-				poi_to_category[row['safegraph_place_id']] = GetCategory(int(row['naics_code'] or 0))
+				poi_to_category[row['safegraph_place_id']] = category_extractor(int(row['naics_code'] or 0))
 	return poi_to_category
 
 def LoadPoiPatterns(file_names, census_block_stats, poi_to_category, row_key_extractor, filter_states):
@@ -215,6 +219,29 @@ def ConvertToInterconnectData(state_stats):
 			interconnect_data = interconnect_data_map[neighborhood]
 			interconnect_data.category_map[category] = category_data
 	return interconnect_data_map
+
+
+def GetPerCategoryStats(poi_pattern_file_names, poi_to_category, row_key_extractor=ConvertRowKey):
+	per_category_count = {}
+	for file_name in poi_pattern_file_names:
+		print("Parsing file: {}".format(file_name))
+		with gzip.open(file_name) as f:
+			csv_dict_reader = csv.DictReader(f)
+			for i, row in enumerate(csv_dict_reader):
+				if i % 100000 == 0:
+					print("Loading row #{}: POI:{}".format(i, row['location_name']))
+				row_key = row_key_extractor(row['poi_cbg'])
+				poi_type = poi_to_category.get(row['safegraph_place_id'], None)
+				if poi_type:
+					combined_key = (row_key, poi_type)
+					per_day_visits = json.loads(row['visits_by_day'])
+					existing = per_category_count.get(combined_key)
+					if not existing:
+						per_category_count[combined_key] = per_day_visits
+					else:
+						new_data = [per_day_visits[i] + existing[i] for i in range(len(existing))]
+						per_category_count[combined_key] = new_data
+	return per_category_count
 
 
 
