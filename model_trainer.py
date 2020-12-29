@@ -2,6 +2,7 @@ import argparse
 import model_evolution
 import data_parser
 import datetime
+import json
 
 MONTH_TO_INDEX = {
 	"january": 1,
@@ -37,7 +38,8 @@ if __name__ == '__main__':
 	parser.add_argument("start_month", help="Required: The month to start the training data")
 	parser.add_argument("end_month", help="Required: The month to end the training data (inclusive)")
 	parser.add_argument("state", help="Required: The state to run the training for")
-	parser.add_argument("--num_attempts", help="How many iterations to run the training for", default=2000)
+	parser.add_argument("--num_attempts", help="How many iterations to run the training for", default=2000, type=int)
+	parser.add_argument("--census_tract_level", help="""If specified compute based on census tract instead of county level (much slower).""", default=False, type=bool)
 
 	args = parser.parse_args()
 
@@ -45,9 +47,15 @@ if __name__ == '__main__':
 	end_month = MONTH_TO_INDEX[args.end_month]
 
 	print("Loading monthly interconnect")
-	interconnect_by_month = {}
+	marshal_file_by_month = {}
 	for i in range(start_month, end_month+1):
-		interconnect_by_month[i] = data_parser.LoadPickle("data/computed_interconnect/{}/{}.pickle".format(MONTH_TO_NAME[i], args.state)).values()
+		if args.census_tract_level:
+			marshal_file_by_month[i] = "data/computed_interconnect/{}/{}.marshal".format(MONTH_TO_NAME[i], args.state)
+		else:
+			marshal_file_by_month[i] = "data/computed_county_interconnect/{}/{}.marshal".format(MONTH_TO_NAME[i], args.state)
+
+	interconnect_by_month = data_parser.LoadMonthlyMarshalInterconnect(marshal_file_by_month)
+
 
 
 	print("Loading population and disease estimate data")
@@ -58,13 +66,20 @@ if __name__ == '__main__':
 	if end_month == 12:
 		end_date = datetime.datetime(2021, 1, 1)
 	else:
-		end_date = datetime.datetime(2020, start_month + 1, 1)
+		end_date = datetime.datetime(2020, end_month + 1, 1)
 
-	print("Training for {}-{} and state {}".format(start_date, end_date, args.state))
-	best_results = model_evolution.ComputeRandomParameters(pop_by_county, disease_stats, start_date, end_date, interconnect_by_month, args.num_attempts)
+	evaluation_intervals = set()
+	curr_date = start_date
+	while curr_date < end_date:
+		evaluation_intervals.add(curr_date)
+		curr_date += datetime.timedelta(days=7)
+	evaluation_intervals.add(end_date)
+
+	print("Training for {}-{} and state {}".format(start_date.strftime("%Y/%m/%d"), end_date.strftime("%Y/%m/%d"), args.state))
+	best_results = model_evolution.ComputeRandomParameters(pop_by_county, disease_stats, start_date, end_date, interconnect_by_month, args.num_attempts, 
+		evaluation_intervals=evaluation_intervals)
 
 	for i, (error, transmission_params) in enumerate(best_results):
-		formatted = ([transmission_params.internal_transmission, transmission_params.homogenous_transmission] + 
-					 [transmission_params.beta_by_category[cat] for cat in model_evolution.CATEGORIES])
-		print("Option #{}: {} \nError:{}\nFormatted:{}\n".format(i+1, transmission_params, -error, ",".join([str(x) for x in formatted])))
+		formatted = json.dumps(transmission_params.AsDict())
+		print("Option #{}: {} \nError:{}\nFormatted:{}\n".format(i+1, transmission_params, error, formatted))
 

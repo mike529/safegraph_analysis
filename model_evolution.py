@@ -9,6 +9,9 @@ import data_parser
 import datetime
 import pickle
 import scipy.sparse
+import sklearn.svm
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 INFECTION_DURATION = 7
 
@@ -22,11 +25,12 @@ class BlockStats():
 		# Population for the block
 		self.population = population
 		# Start off assuming that those currently infected are evenly split between their days of infection.
-		self.current_infected_by_day = collections.deque()
+		self.current_infected_by_day = []
 		self.current_infected = 0
 		for current_infected in currently_infected:
-			self.current_infected_by_day.appendleft(current_infected)
+			self.current_infected_by_day.append(current_infected)
 			self.current_infected += current_infected
+		self.current_index = len(self.current_infected_by_day) - 1
 		# Start off with some proportion already immune due to already being infected.
 		self.ever_infected = ever_infected
 
@@ -38,9 +42,10 @@ class BlockStats():
 	def AdvanceDay(self, new_infections):
 		# Update the total infected.
 		self.current_infected += new_infections
-		self.current_infected_by_day.appendleft(new_infections)
-		recovered = self.current_infected_by_day.pop()
+		recovered = self.current_infected_by_day[self.current_index]
 		self.current_infected -= recovered
+		self.current_infected_by_day[self.current_index] = new_infections
+		self.current_index = (self.current_index + 1) % len(self.current_infected_by_day)
 		self.ever_infected += new_infections
 
 	def ComputeActualInfections(self, raw_infections):
@@ -54,25 +59,26 @@ class BlockStats():
 		average_infected = (1 - individual_miss_infection) * (self.population - self.ever_infected)
 		return average_infected
 
+# class SubBlockParams():
+# 	def __init__(self, population, transmission_weight):
+# 		self.population = population
+# 		self.transmission_weight = transmission_weight
+
+# class GroupedBlock():
+# 	def __init__(block_id, sub_blocks, currently_infected, ever_infected):
+# 		self.total_population = sum(sub_block.population for sub_block in sub_blocks)
+# 		self.total_weighted_transmission = sum(sub_block.population * sub_block.transmission_weight)
+
+
+# 		self.blocks = [BlockStats(block_id, sub_block.population, sub_block.)]
+
+
 # Fast copying of blocks. Significantly faster than copy.deepcopy
 def CopyBlock(block):
 	current_infected_copy = [n for n in block.current_infected_by_day]
 	current_infected_copy.reverse()
 
 	return BlockStats(block.block_id, block.population, current_infected_copy, block.ever_infected)
-
-# Data classes for storing the interconnect data, this is computed in safegraph parser.
-class CategoryData():
-	def __init__(self, transmission, neighbors):
-		self.transmission = transmission
-		self.neighbors = neighbors
-
-class InterconnectData():
-	def __init__(self, block, normalization_factor, category_map):
-		self.block = block
-		self.normalization_factor = normalization_factor
-		self.category_map = category_map
-
 
 # Compute the internal matrices for transmission by each category.
 # When training the data we need to mutate the weights frequently and it is much quicker to
@@ -106,17 +112,18 @@ class TransmissionStatistics():
 class StatsContainer():
 	def __init__(self, raw_interconnect_data):
 		self.block_length = len(raw_interconnect_data)
+		self.index_for_block = {}
 		self.cat_map = {}
 		for category in CATEGORIES:
 			self.cat_map[category] = GetUnweightedTransmissionStatsByCategory(raw_interconnect_data, category)
 	
-	def GetWeightedStats(self, beta_by_category, internal_transmission=0, homogenous_transmission=0):
+	def GetWeightedStats(self, beta_by_category, internal_transmission=0, homogenous_transmission=0, monthly_factor=1.0):
 		
 		total_transmission_by_block = np.zeros((self.block_length),)
 		temp_transmission_matrix = np.zeros((self.block_length, self.block_length))
 
 		for category, (transmission_per_block, transmission_matrix) in self.cat_map.iteritems():
-			total_transmission_by_block += (transmission_per_block * beta_by_category.get(category, 0.0))
+			total_transmission_by_block += (transmission_per_block * beta_by_category.get(category, 0.0) * monthly_factor)
 			temp_transmission_matrix += transmission_matrix * beta_by_category.get(category, 0.0)
 
 		for i in range(len(temp_transmission_matrix)):
@@ -124,7 +131,7 @@ class StatsContainer():
 			if row_sum != 0:
 				temp_transmission_matrix[i] /= row_sum
 
-		return TransmissionStatistics(total_transmission_by_block, temp_transmission_matrix, internal_transmission, homogenous_transmission)		
+		return TransmissionStatistics(total_transmission_by_block, temp_transmission_matrix, internal_transmission * monthly_factor, homogenous_transmission * monthly_factor)		
 
 
 def AdvanceDay(block_stats, transmission_stats):
@@ -210,37 +217,53 @@ def ComputeWeightedError(predicted_blocks, disease_stats, current_date):
 		if predicted == 0 and actual == 0:
 			return 0
 		else:
-			return ((predicted - actual) / actual) ** 2
+			return (2 *  abs(predicted - actual)) / (predicted + actual)
+	total_predicted = 0
+	total_actual = 0
+	total_pop = 0
 
 	for county, (pop, predicted_current_sick, predicted_ever_sick) in stats_by_county.iteritems():
 		actual_ever, actual_current = data_parser.ExtractStats(disease_stats[county], current_date, INFECTION_DURATION)
-		relative_error = GetRelativeError(predicted_ever_sick + 10, actual_ever + 10)
-		relative_error += GetRelativeError(predicted_current_sick + 10, sum(actual_current) + 10)
-		total_weight += (pop * 2) 
+		relative_error = GetRelativeError(predicted_ever_sick, actual_ever)
+		total_weight += pop 
 		total_weighted_error += pop * relative_error
-
-	return (total_weighted_error / total_weight)
+		total_predicted += predicted_ever_sick
+		total_actual += actual_ever
+		
+	return total_weighted_error / total_weight
 
 
 class TransmissionParameters():
-	def __init__(self, beta_by_category, internal_transmission, homogenous_transmission, rounding=None):
+	def __init__(self, beta_by_category, internal_transmission, homogenous_transmission, monthly_factor, rounding=None):
 		self.beta_by_category = beta_by_category
 		self.internal_transmission = internal_transmission
 		self.homogenous_transmission = homogenous_transmission
+		self.monthly_factor = monthly_factor
 		if rounding:
 			self.homogenous_transmission = round(self.homogenous_transmission, rounding)
 			self.internal_transmission = round(self.internal_transmission, rounding)
 			for cat in self.beta_by_category:
 				self.beta_by_category[cat] = round(self.beta_by_category[cat], rounding)
+			for month in self.monthly_factor:
+				self.monthly_factor[month] = round(self.monthly_factor[month], rounding)
 	def __repr__(self):
-		return "Internal: {} Homogenous: {} Activity Based: {}".format(self.internal_transmission, self.homogenous_transmission, self.beta_by_category)
+		return "Internal: {} Homogenous: {} Activity Based: {} Monthly Factors: {}".format(self.internal_transmission, self.homogenous_transmission, self.beta_by_category, self.monthly_factor)
+
+	def AsDict(self):
+		return {"internal": self.internal_transmission, "homogenous": self.homogenous_transmission, "monthly_factors": self.monthly_factor, "beta_by_category": self.beta_by_category}
+
+def TransmissionParamsFromDict(param_dict):
+	return TransmissionParameters(param_dict["beta_by_category"], param_dict["internal"], param_dict["homogenous"], param_dict["monthly_factors"])
+
+
 
 def AssessParameters(starting_blocks, disease_stats, start_date, end_date, transmission_parameters, stats_container_by_month, evaluation_intervals, include_interval_blocks):
 	transmission_stats_by_month = {
 		month: stats_container.GetWeightedStats(
 			transmission_parameters.beta_by_category, 
 			transmission_parameters.internal_transmission, 
-			transmission_parameters.homogenous_transmission) for month, stats_container in stats_container_by_month.iteritems()
+			transmission_parameters.homogenous_transmission,
+			transmission_parameters.monthly_factor.get(month, 1.0)) for month, stats_container in stats_container_by_month.iteritems()
 		}
 	current_date = start_date
 	copied_blocks = [CopyBlock(block) for block in starting_blocks]
@@ -257,30 +280,32 @@ def AssessParameters(starting_blocks, disease_stats, start_date, end_date, trans
 			if include_interval_blocks:
 				blocks_by_interval[current_date] = [CopyBlock(block) for block in  copied_blocks]
 
-
-	return blocks_by_interval, (sum(prediction_errors) / len(prediction_errors))
+	total_weighted_error = 0
+	total_weight = 0.0
+	for i, error in enumerate(prediction_errors):
+		total_weighted_error += error * (i + 1)
+		total_weight += (i + 1)
+	return blocks_by_interval, (total_weighted_error / total_weight)
 
 class UniformRandomParams():
-	def __init__(self, internal_range, homogenous_range, cat_range):
+	def __init__(self, internal_range, homogenous_range, cat_range, monthly_range, months):
 		self.internal_range = internal_range
 		self.homogenous_range = homogenous_range
 		self.cat_range = cat_range
+		self.monthly_range = monthly_range
+		self.months = months
 
 	def GetNewRandom(self):
 		internal_transmission = random.uniform(*self.internal_range)
 		homogenous_transmission = random.uniform(*self.homogenous_range)
-		cat_map = {cat: random.uniform(*self.cat_range) for cat in CATEGORIES}
-		return TransmissionParameters(cat_map, internal_transmission, homogenous_transmission, rounding=4)
-
-	def MutateRandom(self, transmission_parameters):
-		internal_transmission = random.uniform(.95, 1.05) * transmission_parameters.internal_transmission
-		homogenous_transmission = random.uniform(.95, 1.05) * transmission_parameters.homogenous_transmission
-		cat_map = {cat:random.uniform(.95, 1.05) * t for cat, t in transmission_parameters.beta_by_category.iteritems()}
-		return TransmissionParameters(cat_map, internal_transmission, homogenous_transmission, rounding=4)
+		used_random = random.uniform(*self.cat_range)
+		cat_map = {cat: used_random for cat in CATEGORIES}
+		monthly_factor = {month: random.uniform(*self.monthly_range) for month in self.months}
+		return TransmissionParameters(cat_map, internal_transmission, homogenous_transmission, monthly_factor,  rounding=5)
 
 
-def DefaultRandomParams():
-	return UniformRandomParams((0,2.0), (0, 2.0), (0, .005))
+def DefaultRandomParams(months):
+	return UniformRandomParams((0, 1.5), (0, 0), (0, .003), (1.0, 1.0), months)
 
 
 def BuildAssessmentFunction(population_by_county, disease_stats, starting_date, ending_date, interconnect_by_month, evaluation_intervals=None, include_interval_blocks=False):
@@ -300,36 +325,67 @@ def BuildAssessmentFunction(population_by_county, disease_stats, starting_date, 
 		return AssessParameters(starting_blocks, disease_stats, starting_date, ending_date, transmission_parameters, stats_container_by_month, evaluation_intervals, include_interval_blocks)
 	return ComputeAttempt
 
-def ComputeRandomParameters(population_by_county, disease_stats, starting_date, ending_date, interconnect_by_month, num_attempts=2000, num_to_keep=10, random_param_gen=None, evaluation_intervals=None):
+def ComputeRandomParameters(population_by_county, disease_stats, starting_date, ending_date, interconnect_by_month, num_attempts=1000, num_to_keep=10, random_param_gen=None, evaluation_intervals=None):
+	def ExtractFeatures(transmission_parameters):
+		features = [transmission_parameters.internal_transmission, transmission_parameters.homogenous_transmission, transmission_parameters.beta_by_category['OTHER']]
+		# for category, beta in sorted(transmission_parameters.beta_by_category.iteritems()):
+		# 	features.append(beta)
+		# for month, factor in sorted(transmission_parameters.monthly_factor.iteritems()):
+		# 	features.append(factor)
+		return features
+
+	print("Generating Training Data")
+	features = []
+	scores = []
+
 	if random_param_gen is None:
-		random_param_gen  = DefaultRandomParams()
+		random_param_gen  = DefaultRandomParams(interconnect_by_month.keys())
 
 	compute_attempt = BuildAssessmentFunction(population_by_county, disease_stats, starting_date, ending_date, interconnect_by_month, evaluation_intervals, include_interval_blocks=False)
 
-	best_results = []
-	for i in range(num_attempts):
-		if (i % 2) == 1 and best_results:
-			best_result_index = random.randint(0, len(best_results) - 1)
-			best_result_params = best_results[best_result_index][1]
+	# for i in range(num_attempts):
+	# 	random_params = random_param_gen.GetNewRandom()
+	# 	_, error = compute_attempt(random_params)
+	# 	features.append(ExtractFeatures(random_params))
+	# 	scores.append(error)
+	# 	if (i % 10) == 0:
+	# 		print("Random Attempt: #{} Error: {} Best Error:{}".format(i, error, min(scores)))
 
-			random_params = random_param_gen.MutateRandom(best_result_params)
-		else:
-			random_params = random_param_gen.GetNewRandom()
-		_,_, error = compute_attempt(random_params)
-		if len(best_results) < num_to_keep:
-			heapq.heappush(best_results, (-error, random_params))
-		else:
-			heapq.heappushpop(best_results, (-error, random_params))
-		if (i % 10) == 0:
-			best_result = max(best_results)
-			print("Attempt: #{} Best Params:{} Best Error:{}".format(i, best_result[1], -best_result[0]))			
-	return sorted(best_results, key=lambda x: -x[0])
+	# test_sample_length = int(len(features) * .1)
+
+	# print("Fitting a model with {} training points and {} test points".format(len(features) - test_sample_length, test_sample_length))
+	# clf = make_pipeline(StandardScaler(), sklearn.svm.SVR(epsilon=.01))
+	# clf.fit(features[test_sample_length:], scores[test_sample_length:])
+	# model_fit = clf.score(features[test_sample_length:], scores[test_sample_length:])
+	# test_fit = clf.score(features[:test_sample_length], scores[:test_sample_length])
+	# print("Model created with training fit {} and test fit {}".format(model_fit, test_fit))
+
+	# num_candidate = 100000
+	# print("Generating {} candidate solutions".format(num_candidate))
+	# predict_samples = [random_param_gen.GetNewRandom() for i in range(num_candidate)]
+	# predict_features = [ExtractFeatures(sample) for sample in predict_samples]
+	# predict_scores = clf.predict(predict_features)
+	# sorted_scores = sorted((abs(score), i) for i, score in enumerate(predict_scores))
+
+	actual_scores = []
+	for i in range(num_attempts):
+		# used_params = predict_samples[index]
+		used_params = random_param_gen.GetNewRandom()
+		_, error = compute_attempt(used_params)
+		actual_scores.append((error, used_params))
+		if i % 10 == 0:
+			print ("Fitted Attempt #{} Predicted Error:{} Error:{} Best Error: {}".format(i, 1.0, error, min(actual_scores)[0]))
+	return sorted(actual_scores)[0:num_to_keep]
+
+
+
 
 
 def RunScenario(population_by_county, disease_stats, starting_date, ending_date, interconnect_by_month, transmission_parameters, evaluation_intervals=None):
 	compute_attempt = BuildAssessmentFunction(population_by_county, disease_stats, starting_date, ending_date, interconnect_by_month, evaluation_intervals, include_interval_blocks=True)
 
 	computed_blocks, error = compute_attempt(transmission_parameters)
+
 	predicted_final_blocks = computed_blocks[ending_date]
 	predicted_stats_by_county = GetStatsByCounty(predicted_final_blocks)
 	

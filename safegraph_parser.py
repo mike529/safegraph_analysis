@@ -8,6 +8,7 @@ import scipy.sparse
 import numpy
 import gzip
 import model_evolution
+import data_parser
 
 csv.field_size_limit(sys.maxsize)
 
@@ -138,7 +139,7 @@ def LoadPoiPatterns(file_names, census_block_stats, poi_to_category, row_key_ext
 					MarkKey(source_state, poi_type, source_id, (source_ping_count * median_dwell), pings_by_neighborhood)
 
 					if poi_state == source_state:
-						MarkKey(source_state, poi_type, (source_id, poi_id), source_ping_count, visits)
+						MarkKey(source_state, poi_type, (source_id, poi_id), (source_ping_count * median_dwell), visits)
 	return pings_by_neighborhood, visits
 
 def BuildPoiSerialization(pings_for_state, visits_for_state, census_block_stats):
@@ -213,9 +214,9 @@ def ConvertToInterconnectData(state_stats):
 	interconnect_data_map = {}
 	for category, category_stats in state_stats.iteritems():
 		for neighborhood, neighborhood_stats in category_stats.iteritems():
-			category_data = model_evolution.CategoryData(neighborhood_stats.total_pings, neighborhood_stats.neighbors)
+			category_data = data_parser.CategoryData(neighborhood_stats.total_pings, neighborhood_stats.neighbors)
 			if neighborhood not in interconnect_data_map:
-				interconnect_data_map[neighborhood] = model_evolution.InterconnectData(neighborhood, neighborhood_stats.population, {})
+				interconnect_data_map[neighborhood] = data_parser.InterconnectData(neighborhood, neighborhood_stats.population, {})
 			interconnect_data = interconnect_data_map[neighborhood]
 			interconnect_data.category_map[category] = category_data
 	return interconnect_data_map

@@ -6,31 +6,10 @@ import os
 import argparse
 import multiprocessing.pool
 import errno
+import data_parser
 
 def FullDir(dir_name):    
 	return [os.path.join(dir_name, file_name) for file_name in os.listdir(dir_name)]
-
-
-
-
-def StorePickleFile(pickle_data, file_name):
-	if not os.path.exists(os.path.dirname(file_name)):
-	    try:
-	        os.makedirs(os.path.dirname(file_name))
-	    except OSError as exc: # Guard against race condition
-	        if exc.errno != errno.EEXIST:
-	            raise
-
-	print("Writing to {}".format(file_name))
-
-	if file_name.endswith('gz'):
-		with gzip.open(file_name, 'w') as g:
-			pickle.dump(pickle_data, g, protocol=-1)
-	else:
-		with open(file_name, 'w') as g:
-			pickle.dump(pickle_data, g, protocol=-1) 
-
-
 
 if __name__ == '__main__':
 	parser = argparse.ArgumentParser()
@@ -58,13 +37,12 @@ if __name__ == '__main__':
 		month_files, census_block_stats, poi_cat_files,  
 		row_key_extractor=row_key_extractor, filter_states=states)
 	print("Storing data")
-	pool = multiprocessing.pool.ThreadPool(8)
 
-	def StoreState(state_tuple):
-		state, combined_data_for_state = state_tuple
-		StorePickleFile(combined_data_for_state, "data/computed_interconnect/{}/{}.pickle".format(month, state))
-
-	pool.map(StoreState, combined_data_by_state.iteritems())
-
+	for state, combined_data_for_state in combined_data_by_state.iteritems():
+		print("Storing data for {}".format(state))
+		if args.tract_type == "census_tract":
+			data_parser.StoreMarshalInterconnect(combined_data_for_state,  "data/computed_interconnect/{}/{}.marshal".format(month, state))
+		else:
+			data_parser.StoreMarshalInterconnect(combined_data_for_state, "data/computed_county_interconnect/{}/{}.marshal".format(month, state))
 
 
