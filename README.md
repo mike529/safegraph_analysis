@@ -25,14 +25,15 @@ In order to compute the safegraph data you will need the following.
  This will load all the county level data for the month of July and store the output files in the desired locations.
 
 There are two optional arguments which can be specified in addition.
-	* tract_type: Specify --tract_type=census_tract to compute data at the census tract level instead of the county level.
-	* filter_states: Specify a comma separated list of state abbreviations to 
+
+* tract_type: Specify --tract_type=census_tract to compute data at the census tract level instead of the county level.
+* filter_states: Specify a comma separated list of state abbreviations to 
+
 This script will take a long time and use a lot of memory.
 
 If you want to load data for a single state instead
 
-```bash
-	./load_state_data.sh sd
+```bash	./load_state_data.sh sd
 ```
 
 # Training parameters:
