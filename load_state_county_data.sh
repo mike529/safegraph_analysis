@@ -1,7 +1,7 @@
 set -e
 set -x
 
-MONTHS="may june july august september october november"
+MONTHS="march april may june july august september october november"
 
 for MONTH in $MONTHS
 do

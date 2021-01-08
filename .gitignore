@@ -1,9 +1,11 @@
 raw_data/*
 data/computed_interconnect/*
 data/computed_county_interconnect/*
+data/computed_block_interconnect/*
 !raw_data/.gitignore
 __pycache__/
 *.py[cod]
+*.bak
 *$py.class
 *DS_Store*
 

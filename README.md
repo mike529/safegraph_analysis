@@ -12,7 +12,7 @@ In order to compute the safegraph data you will need the following.
 
    * [Monthly Place Pattern](https://docs.safegraph.com/docs/places-schema#section-patterns) data for the month you want to generate. This data should have the .csv.gz files stored in raw_data/placegraph_data/${MONTH}/
    * [Category](https://docs.safegraph.com/docs#section-core-places) data for all the US POIs. This data should have the .csv.gz files stored in raw_data/placegraph_data/category_map
-   * [Home Panel Summary](https://www.safegraph.com/neighborhood-patterns) the home_panel_summary file should be stored in raw_data/placegraph_data/home_panel_summary.
+   * [Home Panel Summary](https://www.safegraph.com/neighborhood-patterns) the home_panel_summary file should be stored in raw_data/placegraph_summary_data/${MONTH}/home_panel_summary.csv.
 
  After all the files are stored in those locations you can use the interconnect_loader script to compute the data.
 
